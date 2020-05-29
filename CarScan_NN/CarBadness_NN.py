@@ -51,9 +51,10 @@ def read_data(base_path='./Data',split_size=[0.6, 0.2, 0.2]):  #  the split_size
         while sum([training_samples, valid_samples, test_samples]) != len(new_data):
             training_samples += 1
         #split samples
-        new_datadict = {'train': new_data[:training_samples],
-                        'validation': new_data[training_samples + 1:training_samples + valid_samples],
-                        'test': new_data[-test_samples:]}
+        new_datadict = {'train': new_data[ : training_samples],
+                        'validation': new_data[training_samples : training_samples + valid_samples],
+                        'test': new_data[-test_samples : ]}
+        
     else:
         new_datadict = {'train': new_data,
                         'validation': new_data,
@@ -61,11 +62,50 @@ def read_data(base_path='./Data',split_size=[0.6, 0.2, 0.2]):  #  the split_size
     print("Adatbetöltés kész")
     return new_datadict
 
-    class CarBadnessGuesser(nn.Module):
+
+
+class Classificator:
+
+    #-------------------------
+    # Label   Class
+    #-------------------------
+    # 0:      Not damaged
+    # 1:      Slightly damaged
+    # 2:      Damaged
+    # 3:      Very damaged
+    #-------------------------
+    
+    def getClassName(self, c):
+        if c==0:
+            n = "Not Damaged"
+        elif c==1:
+            n = "Slightly damaged"
+        elif c==2:
+            n = "Damaged"
+        elif c==3:
+            n = "Very damaged"
+        return n;
+    
+    def getClass(self, x):
+        x = int(x)
+        
+        if x==0:
+            return 0      
+        if x<=100/3:
+            return 1
+        elif  x>100/3 and x<200/3:
+            return 2
+        else:
+            return 3
+    
+    # Compare Prediction and Label classes
+    def isCorrect(self, prediction, label):
+        return self.getClass(prediction) == self.getClass(label)
+
+class CarBadnessGuesser(nn.Module):
     def __init__(self, lr=0.01):
         super(CarBadnessGuesser, self).__init__()
 
-        self.dataset = read_data()
         self.valid_freq = 10
 
         self.model = nn.Sequential(
@@ -90,23 +130,8 @@ def read_data(base_path='./Data',split_size=[0.6, 0.2, 0.2]):  #  the split_size
 
         self.loss_fn = nn.MSELoss()
         self.optimizer = optim.Adam(list(self.model.parameters()) + list(self.linear.parameters()), lr=lr)
-
-
-    # 0: no damage, 1: slightly damaged, 2: damaged, 3: very damaged
-    def getClass(self, x):
-        if x==0:
-            return 0      
-        x = int(x)
-        if x<=100/3:
-            return 1
-        elif  x>100/3 and x<200/3:
-            return 2
-        else:
-            return 3
-    
-    # compare prediction and label classes
-    def isCorrect(self, prediction, label):
-        return self.getClass(prediction) == self.getClass(label)
+        
+        self.classificator = Classificator()
 
     def forward(self, x):
         conv_out = self.model(x.unsqueeze(0).unsqueeze(0))
@@ -118,22 +143,21 @@ def read_data(base_path='./Data',split_size=[0.6, 0.2, 0.2]):  #  the split_size
     
         for epoch in trange(epochs):
             t_correct = 0
-            total = 1
-            for step, data in enumerate(self.dataset["train"]):
+            total = 0
+            for step, data in enumerate(dataset["train"]):
                 input_data = data['KUL'].cuda()
                 label = data['EES'].cuda()
                 
                 prediction = self(input_data)
                 loss = self.loss_fn(prediction, label)
                 #print('training- ', 'y^', prediction.item(), 'y', label.item(), loss.item())
-                #print('t_correct', t_correct, 'total',total)
                 
                 loss.backward()     
                 self.optimizer.step()
                 b_loss.append(loss.item())
                 
                 #check if its prediction matches label class
-                if( self.isCorrect(prediction.item(), label.item()) ):
+                if( self.classificator.isCorrect(prediction.item(), label.item()) ):
                     t_correct += 1;
                 total += 1;
                 
@@ -150,8 +174,6 @@ def read_data(base_path='./Data',split_size=[0.6, 0.2, 0.2]):  #  the split_size
                 
         print('Training acc:', t_acc, '%')
         print('Validation acc: ', v_acc, '%')  
-        self.save_weights()
-        
         plt.plot(v_loss)
         plt.ylabel('Validation loss')
         plt.show()
@@ -165,11 +187,11 @@ def read_data(base_path='./Data',split_size=[0.6, 0.2, 0.2]):  #  the split_size
         :return: The validation loss average
         """
         v_correct = 0
-        total = 1
+        total = 0
         average_loss = 0
         step = 0
         
-        for step, data in enumerate(self.dataset['validation']):
+        for step, data in enumerate(dataset['validation']):
             with torch.no_grad():
                 input_data = data['KUL'].cuda()
                 label = data['EES'].cuda()
@@ -182,31 +204,65 @@ def read_data(base_path='./Data',split_size=[0.6, 0.2, 0.2]):  #  the split_size
                 average_loss += loss.item()
                 
                 #check if its correct
-                c = self.isCorrect(prediction.item(), label.item())
+                c = self.classificator.isCorrect(prediction.item(), label.item())
                 if(c == True):
                     v_correct += 1;
                 total += 1;
         
         #calculate the validation accuracy
-        v_correct = v_correct/total * 100  
-        return average_loss / (step + 1), v_correct
+        v_acc = v_correct/total * 100
+        return average_loss / (step + 1), v_acc
         print("Validation is complete")
-
+    
     def test(self):
         """
         Runs the evaluation of the network.
         :return: average loss for the test
         """
+        t_correct = 0
+        total = 0
         average_loss = 0
         step = 0
-        for step, data in enumerate(self.dataset['test']):
+        
+        for step, data in enumerate(dataset['test']):
             with torch.no_grad():
                 input_data = data['KUL'].cuda()
                 prediction = self(input_data)
+                
                 loss = self.loss_fn(prediction, data['EES'].cuda())
+                
+                print('---------------------------------')
+                print()
+                print('Prediction: ', prediction.item())
+                print('Excpected:  ', data['EES'].cuda().item())   
+                print()
+                prediction_label = self.classificator.getClass(prediction.item())
+                print('Class:          ', self.classificator.getClassName(prediction_label))
+                expected_label = self.classificator.getClass(data['EES'].cuda())
+                print('Expected Class: ', self.classificator.getClassName(expected_label))
+                print()
+                print('loss: ', loss.item())
+                print()
+                
+                #check if its correct
+                c = self.classificator.isCorrect(prediction.item(), data['EES'].cuda().item())
+                if(c == True):
+                    t_correct += 1;
+                total += 1;
+                
                 average_loss += loss.item()
-        return average_loss / step
-        print("the test is complete")
+
+        #calculate the validation accuracy
+        t_acc = t_correct/total * 100          
+        average_loss = average_loss / step   
+        print()
+        print('---------------------------------')
+        print('Test Accuracy: ', t_acc, ' %')
+        print('Average Loss:  ', average_loss)
+        print('---------------------------------')
+        print()
+        print("Test is completed")       
+        return average_loss
 
     def save_weights(self, save_dir="./training"):
         """
@@ -217,15 +273,34 @@ def read_data(base_path='./Data',split_size=[0.6, 0.2, 0.2]):  #  the split_size
         save_path = os.path.join(save_dir, timestamp)
         if not os.path.exists(save_path):
             os.makedirs(save_path)
-        torch.save(list(self.model.parameters()) +
-                   list(self.linear.parameters()), os.path.join(save_path, 'model.weights'))
-        print("saving weights is complete")
+        # save model within Training folder with timestamp together with preivous models
+        torch.save(self.state_dict(), os.path.join(save_path, 'model.weights'))
+        # save last model within Weights folder (overwrite)
+        torch.save(self.state_dict(), './weights/model.weights')
 
     def load_weights(self):
-        self.optimizer = torch.load('model.weights')
-        print("loading is complete")
+        self.load_state_dict = torch.load('./weights/model.weights')
+        print("loading weights is complete")
 
 if __name__ == "__main__":
-    learner = CarBadnessGuesser()
+    
+    # set mode
+    TRAIN = False
+    TEST = True
+
+    # Load the data and get the splitted dataset
+    dataset = read_data()
+
+    # instanciate the NN
+    net = CarBadnessGuesser()
     torch.backends.cudnn.enabled = False
-    learner.train()
+
+    # Train, Validate and Save the model
+    if(TRAIN):
+        net.train()
+        net.save_weights()
+    
+    # Load the model and Test
+    if(TEST):
+        net.load_weights()
+        net.test()

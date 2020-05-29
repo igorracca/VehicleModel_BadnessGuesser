@@ -1,4 +1,0 @@
-
-tanító szett 1000 elem
-80 epoch
-kb. 10 óra futásidõ
